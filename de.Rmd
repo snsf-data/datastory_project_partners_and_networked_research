@@ -1,0 +1,1125 @@
+---
+params: 
+  title: ""
+  publication_date: ""
+  doi: ""
+  github: ""
+  lang: ""
+output:
+  html_document:
+    anchor_sections: false
+    theme: null
+    highlight: null
+    mathjax: null
+    css: ["style.css", "https://fonts.googleapis.com/css?family=Source+Sans+Pro:400,700&display=swap"]
+    self_contained: true
+# To produce Word output, just comment the output lines above and uncomment
+# the ones here.
+# output: word_document
+# always_allow_html: yes
+title: "`r params$title`"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r general-setup, include=FALSE}
+## This file contains the GERMAN version of the data story
+
+# Set general chunk options
+knitr::opts_chunk$set(
+  echo = FALSE, fig.showtext = TRUE, fig.retina = 3, out.width = "100%",
+  fig.height = 4, fig.align = "center", warning = FALSE, message = FALSE
+)
+
+# Install snf.datastory package if not available, otherwise load it
+if (!require("snf.datastory")) {
+  if (!require("devtools")) {
+    install.packages("devtools")
+    library(devtools)
+  }
+  install_github("snsf-data/snf.datastory")
+  library(snf.datastory)
+}
+
+# Load packages
+library(tidyverse)
+library(lubridate)
+library(tidytext)
+library(scales)
+library(conflicted)
+library(jsonlite)
+library(janitor)
+library(here)
+library(glue)
+library(ggiraph)
+library(gfonts)
+library(systemfonts)
+
+# Conflict preferences
+conflict_prefer("filter", "dplyr")
+conflict_prefer("get_datastory_theme", "snf.datastory")
+conflict_prefer("get_datastory_scheme", "snf.datastory")
+
+# Increase showtext package font resolution
+showtext_opts(dpi = 320)
+
+# Set the locale for date formatting (Windows)
+Sys.setlocale("LC_TIME", "German")
+
+# Create function to print number with local language-specific format
+print_num <- function (x,
+                       lang = if_else(params$lang != "", params$lang, "en"))
+{
+  
+  if (lang == "en") 
+    prettyNum(x, big.mark = ",", decimal.mark = ".")
+  else if (lang == "de") 
+    prettyNum(x, big.mark = "", decimal.mark = ",")
+  else if (lang == "fr") 
+    prettyNum(x, big.mark = "", decimal.mark = ",")
+  
+}
+
+# Need to register the font to allow its use by ggiraph when creating SVG files
+if(!font_family_exists("Source Sans Pro")){
+  
+  # Check if the font already exist in the repository
+  if (!file.exists(here("fonts", "css", "source-sans-pro.css"))) {
+    
+    # Required to make available the Source Sans Pro to ggiraph to create the
+    # SVG for interactive plots.
+    setup_font(
+      id = "source-sans-pro", 
+      output_dir = "fonts", 
+      variants = c("regular", "italic", "700", "700italic"), 
+      prefer_local_source = FALSE
+    )
+    
+  }
+  
+  # Ensure rendering of Source Sans Pro is possible for the reader even if not
+  # installed (required for ggiraph)
+  use_font("source-sans-pro", "fonts/css/source-sans-pro.css",
+           selector = ".dummy-selector")
+  
+  # Register existing/downloaded fonts
+  register_font(
+    name = "Source Sans Pro", 
+    plain = list("fonts/fonts/source-sans-pro-v21-latin-regular.woff", 0), 
+    bold = list("fonts/fonts/source-sans-pro-v21-latin-700.woff", 0), 
+    italic = list("fonts/fonts/source-sans-pro-v21-latin-italic.woff", 0),
+    bolditalic = list("fonts/fonts/source-sans-pro-v21-latin-700italic.woff", 0)
+  )
+}
+
+# Knitr hook for local formatting of printed numbers
+knitr::knit_hooks$set(
+  inline = function(x) {
+    if (!is.numeric(x)) {
+      x
+    } else {
+      print_num(x)
+    }
+  }
+)
+
+# Produce an interactive figure with ggiraph based on a ggplot object
+make_ggiraph <- function(x,                    # ggplot object
+                         h = 4,                # height of the svg generated
+                         sw = 2,               # width of the stroke
+                         fcolor = "#f6685e",   # color (fill)
+                         color = NA,           # color
+                         scolor = "#f6685e") { # color of the stroke
+  girafe(
+    ggobj = x,
+    height_svg = h,
+    options = list(
+      opts_toolbar(saveaspng = FALSE),
+      opts_hover(
+        css =
+          glue("fill:{fcolor};color:{color};stroke:{scolor};stroke-width:{sw};")
+      ),
+      opts_tooltip(
+        css = get_ggiraph_tooltip_css(),
+        opacity = 0.8,
+        delay_mouseover = 0,
+        delay_mouseout = 0
+      )
+    )
+  )
+}
+
+```
+
+```{r print-header-infos, results='asis'}
+
+# Add publication date to header
+cat(format(as_datetime(params$publication_date), "%d.%m.%Y"))
+
+```
+
+```{r data-load, include=FALSE}
+
+# Data to be used in the data story
+dat <-
+  read_csv2(here("data", "data.csv")) |>
+  mutate(
+    research_area =
+      fct_recode(
+        research_area,
+        GSW = "Humanities and Social Sciences",
+        MINT = "Mathematics, Natural and\nEngineering Sciences",
+        LW = "Biology and Medicine"),
+    research_area = fct_relevel(research_area, "LW", after = Inf)
+  )
+
+# Anonymized data on success rate to be used in the data story
+success_dat <-
+  read_csv2(here("data", "success_rate_anonymized_data.csv")) |>
+  mutate(
+    research_area =
+      fct_recode(
+        research_area,
+        GSW = "Humanities and Social Sciences",
+        MINT = "Mathematics, Natural and\nEngineering Sciences",
+        LW = "Biology and Medicine"),
+    research_area = fct_relevel(research_area, "LW", after = Inf)
+  )
+
+```
+
+```{r in-text-data-1, include=FALSE}
+
+# This chunk generates generic data used in-text as well as in the introduction
+
+# Percentage of amount granted dedicated to project partners
+partner_budget_all <-
+  dat |>
+  group_by(snf_grant_number) |>
+  summarise(
+    sum_partner = sum(partner_budget, na.rm = TRUE),
+    amount_granted = unique(amount_granted)
+  ) |>
+  ungroup() |>
+  summarise(
+    pct_partner_budget = sum(sum_partner) / sum(amount_granted, na.rm = TRUE)
+  )
+
+# Percentage of amount granted dedicated to project partners outside Switzerland
+partner_budget_outside_ch <-
+  dat |>
+  group_by(snf_grant_number) |>
+  summarise(
+    sum_partner =
+      sum(
+        partner_budget[role == "Projektpartner" & iso_code != "CH"],
+        na.rm = TRUE
+      ),
+    amount_granted = unique(amount_granted)
+  ) |>
+  ungroup() |>
+  summarise(
+    pct_partner_budget = sum(sum_partner) / sum(amount_granted, na.rm = TRUE)
+  )
+
+# Percentage of funded grants with project partners
+proj_fund_with_partners <-
+  dat |>
+  group_by(snf_grant_number) |> 
+  summarise(n = sum(role == "Projektpartner", na.rm = TRUE) > 0) |>
+  ungroup() |>
+  pull(n) |>
+  mean()
+
+# Number of funded grants with project partners
+n_proj_ch <-
+  dat |>
+  group_by(snf_grant_number) |>
+  summarise(
+    n =
+      sum(role == "Projektpartner" & iso_code == "CH", na.rm = TRUE) > 0
+  ) |>
+  ungroup() |>
+  pull(n) |>
+  sum()
+
+# Number of funded grants with project partners from Europe (excl. CH)
+n_proj_europe <-
+  dat |>
+  group_by(snf_grant_number) |>
+  summarise(
+    n =
+      sum(
+        role == "Projektpartner" & iso_code != "CH" & continent == "Europe",
+        na.rm = TRUE
+      ) > 0
+  ) |>
+  ungroup() |>
+  pull(n) |>
+  sum()
+
+# Number of funded grants with project partners from North America
+n_proj_northam <-
+  dat |>
+  group_by(snf_grant_number) |>
+  summarise(
+    n =
+      sum(
+        role == "Projektpartner" & iso_code %in% c("US", "CA"),
+        na.rm = TRUE
+      ) > 0
+  ) |>
+  ungroup() |>
+  pull(n) |>
+  sum()
+
+# Number of funded grants with project partners from outside Europe
+n_proj_world <-
+  dat |>
+  group_by(snf_grant_number) |>
+  summarise(
+    n =
+      sum(
+        role == "Projektpartner" & continent != "Europe",
+        na.rm = TRUE
+      ) > 0
+  ) |>
+  ungroup() |>
+  pull(n) |>
+  sum()
+
+# Summary data on average number of partners over years and research area
+ave_part_in_projet_incl_part_years <-
+  dat |>
+  group_by(year, research_area, snf_grant_number) |>
+  summarise(n_partners = sum(role == "Projektpartner", na.rm = TRUE)) |>
+  filter(n_partners > 0) |>
+  group_by(year, research_area) |>
+  summarise(n_partners = mean(n_partners), n_proj = n()) |>
+  ungroup() |>
+  mutate(data_id = row_number())
+
+```
+
+**Seit 2017 können in der Projektförderung des SNF Projektpartner:innen zu spezifischen Aspekten der Forschung beitragen. Wie häufig sind solche Partnerschaften? Gibt es Unterschiede zwischen den Forschungsbereichen? Wo arbeiten die Partner:innen?**
+
+Die <a href="https://www.snf.ch/de/WAvYcY7awAUGolST/foerderung/projekte/projekte-in-allen-disziplinen" target="_blank">Projektförderung</a> ist das wichtigste Förderinstrument des SNF. Jährlich unterstützt er dadurch ausgewählte Projekte mit rund 500 Millionen Franken. Seit 2017 haben Gesuchstellende die Möglichkeit, Partner:innen einzubeziehen. Diese leisten einen wesentlichen Beitrag, sind jedoch nicht für das Projekt verantwortlich. Ihr Beitrag wird aus dem Projektbudget finanziert.
+
+Seit der Einführung der Partnerschaften hat der SNF im Rahmen der Projektförderung insgesamt `r print_num(length(unique(dat$snf_grant_number)))` Gesuche bewilligt (ohne die international ausgerichteten <a href="https://www.snf.ch/de/j3eRKmgqIrepqJnT/foerderung/projekte/weave-lead-agency-icis" target="_blank">Weave- und Lead Agency</a>-Gesuche. Bei `r round(proj_fund_with_partners * 100)`% dieser unterstützten Projekte war mindestens eine Partnerin oder ein Partner eingebunden. Die durchschnittliche Zahl der Partnerschaften pro Förderbeitrag stieg zuerst von `r round(ave_part_in_projet_incl_part_years |> filter(year == "2017") |> summarise(mean = weighted.mean(n_partners, n_proj)) |> pull(mean), 1)` im Jahr 2017 auf `r round(ave_part_in_projet_incl_part_years |> filter(year == "2018") |> summarise(mean = weighted.mean(n_partners, n_proj)) |> pull(mean), 1)` im Jahr 2018, ist seither jedoch stabil geblieben.
+
+<div class='info-box'>
+
+<p><b>Zusammenarbeit mit Forschenden in der Schweiz und im Ausland</b></p>
+
+Anders als die Gesuchstellenden können die Projektpartner:innen einer ausländischen Institution angehören. Die Partnerschaften fördern die Schweizer Forschung und erleichtern die Zusammenarbeit mit der nationalen und internationalen Forschungsgemeinschaft. Seit 2017 beteiligte sich in der Projektförderung bei `r round((n_proj_ch / length(unique(dat$snf_grant_number))) * 100)`% der bewilligten Gesuche mindestens eine Partnerin oder ein Partner aus der Schweiz, bei `r round((n_proj_europe / length(unique(dat$snf_grant_number))) * 100)`% aus Europa (ohne Schweiz) und bei `r round(n_proj_world / length(unique(dat$snf_grant_number)) * 100)`% von ausserhalb Europas.
+
+Bis zu 20% des bewilligten Budgets können an Projektpartner:innen vergeben werden, die damit einen direkten Beitrag an die Forschung leisten. Effektiv gingen rund `r round(partner_budget_all$pct_partner_budget * 100)`% des Budgets an Projektpartner:innen, `r round(partner_budget_outside_ch$pct_partner_budget * 100)`% davon an Forschende ausserhalb der Schweiz.
+
+</div>
+
+### Unterschiede zwischen den Forschungsbereichen
+
+```{r in-text-data-2, include=FALSE}
+
+# This chunk generate data used in-text regarding number of project partners
+# over years and across research areas.
+
+# Percentage of projects including partners over years and research area
+pct_proj_with_part_years <-
+  dat |>
+  group_by(year, research_area, snf_grant_number) |>
+  summarise(n_partners = sum(role == "Projektpartner", na.rm = TRUE) > 0) |>
+  group_by(year, research_area) |>
+  summarise(n_partners = mean(n_partners), n_proj = n()) |>
+  ungroup() |>
+  mutate(data_id = row_number())
+
+# Percentage of projects including partners over years
+ave_pct_proj_with_part_years <-
+  dat |>
+  group_by(year, snf_grant_number) |>
+  summarise(n = sum(role == "Projektpartner", na.rm = TRUE) > 0) |>
+  group_by(year) |>
+  summarise(n_partners = mean(n))
+
+```
+
+In den drei Forschungsbereichen Geistes- und Sozialwissenschaften (GSW), Mathematik, Natur- und Ingenieurwissenschaften (MINT) und Lebenswissenschaften (LW) ist der Anteil der Projekte mit mindestens einer Partnerin oder einem Partner zwischen 2017 und 2022 leicht von `r round(filter(ave_pct_proj_with_part_years, year == 2017)$n_partners * 100)`% auf `r round(filter(ave_pct_proj_with_part_years, year == 2022)$n_partners * 100)`% gestiegen. Ein Vergleich ergibt, dass in den MINT-Disziplinen Partnerschaften seltener sind und durchschnittlich weniger Personen einbezogen werden.
+
+```{r data-fig-1-and-2, include=FALSE}
+
+# Figure 1 (ggplot)
+pct_proj_with_part_years_fig <-
+  pct_proj_with_part_years |>
+  ggplot() +
+  aes(
+    x = year,
+    y = n_partners,
+    color = research_area,
+    tooltip =
+      glue(
+        "Jahr: {year}<br>",
+        "Forschungsbereich: {research_area}<br>",
+        "<b>Prozentualer Anteil geförderter Projekte<br>",
+        "mit Projektpartner:innen: {print_num(round(n_partners * 100))}%</b>"
+      ),
+    data_id = data_id
+  ) +
+  geom_line(aes(tooltip = NULL)) +
+  geom_point_interactive(size = 2.5, stroke = 0.2) +
+  geom_text(
+    data =
+      filter(
+        pct_proj_with_part_years,
+        year == 2021
+      ),
+    aes(
+      label = research_area,
+      y = n_partners + 0.035,
+      x = year
+    ),
+    size = 3,
+    hjust = 0.5,
+    family = "Source Sans Pro",
+    fontface = "bold"
+  ) +
+  coord_cartesian(ylim = c(0, 1)) +
+  scale_y_continuous(labels = percent) +
+  scale_color_manual(values = get_datastory_scheme(n_col = 3)) +
+  get_datastory_theme(gridline_axis = "y", legend_position = "")
+
+# Figure 2 (ggplot)
+ave_part_in_projet_incl_part_years_fig <-
+  ave_part_in_projet_incl_part_years |>
+  ggplot() +
+  aes(
+    x = year,
+    y = n_partners, 
+    color = research_area,
+    tooltip =
+      glue(
+        "Jahr: {year}<br>",
+        "Forschungsbereich: {research_area}<br>",
+        "<b>Anzahl Projektpartner:innen: {print_num(round(n_partners, 2))}</b>"
+      ),
+    data_id = data_id) +
+  geom_line(aes(tooltip = NULL)) +
+  geom_point_interactive(size = 2.5, stroke = 0.2) +
+  geom_text(
+    data =
+      filter(
+        ave_part_in_projet_incl_part_years,
+        year == 2022
+      ),
+    aes(
+      label = research_area,
+      y = n_partners,
+      x = year + 0.1
+    ),
+    size = 3,
+    hjust = 0,
+    family = "Source Sans Pro",
+    fontface = "bold"
+  ) +
+  coord_cartesian(ylim = c(0, 4), xlim = c(2017, 2022.25)) +
+  scale_color_manual(values = get_datastory_scheme(n_col = 3)) +
+  get_datastory_theme(gridline_axis = "y", legend_position = "")
+
+```
+
+<div class="hide-mobile hide-tablet widemedia">
+<div class="plot-box">
+<div class="plot-title">Anteil der bewilligten Projekte mit Partner:innen</div>
+```{r fig-1-desk}
+
+# This figure is only visible on desktop devices
+make_ggiraph(pct_proj_with_part_years_fig)
+
+```
+<br>
+<div class="plot-title">Durchschnittliche Anzahl Partner:innen bei Projekten mit Partnerschaften</div>
+
+```{r fig-2-desk}
+
+# This figure is only visible on desktop devices
+make_ggiraph(ave_part_in_projet_incl_part_years_fig)
+
+```
+
+</div>
+</div>
+
+<div class="hide-desktop">
+<div class="plot-box">
+<div class="plot-title">Anteil der bewilligten Projekte mit Partner:innen</div>
+```{r fig-1-phone}
+
+# This figure is only visible on phone and tablet devices
+make_ggiraph(pct_proj_with_part_years_fig)
+
+```
+<br>
+<div class="plot-title">Durchschnittliche Anzahl Partner:innen bei Projekten mit Partnerschaften</div>
+
+```{r fig-2-phone}
+
+# This figure is only visible on phone and tablet devices
+make_ggiraph(ave_part_in_projet_incl_part_years_fig)
+
+```
+</div>
+</div>
+
+```{r institutions-data, include=FALSE}
+
+institutions_order <-
+  c(
+    "Kantonale Universitäten",
+    "ETH-Bereich",
+    "Fachhochschulen",
+    "Pädagogische Hochschulen",
+    "Andere Forschungsinstitutionen"
+  )
+
+# Summary data about project partners over years and as a function of
+# institution type.
+proj_partners_inst_years <-
+  dat |>
+  group_by(snf_grant_number, year) |>
+  mutate(n_partners = sum(role == "Projektpartner", na.rm = TRUE)) |>
+  filter(role != "Projektpartner") |>
+  summarise(
+    n_partners = unique(n_partners),
+    is_eth =
+      sum(
+        research_institution_type == "ETH domain",
+        na.rm = TRUE
+      ) > 0,
+    is_cant =
+      sum(
+        research_institution_type == "Cantonal University",
+        na.rm = TRUE
+      ) > 0,
+    is_applied =
+      sum(
+        research_institution_type == "University of Applied Sciences",
+        na.rm = TRUE
+      ) > 0,
+    is_other =
+      sum(
+        research_institution_type == "Other research institutions",
+        na.rm = TRUE
+      ) > 0,
+    is_edu =
+      sum(
+        research_institution_type == "University of Teacher Education",
+        na.rm = TRUE
+      ) > 0,
+  ) |>
+  ungroup() |>
+  pivot_longer(
+    cols = starts_with("is_"), names_to = "institution", values_to = "value"
+  ) |>
+  filter(value) |>
+  mutate(
+    institution =
+      fct_recode(
+        institution,
+        `Kantonale Universitäten` = "is_cant",
+        `ETH-Bereich` = "is_eth",
+        `Fachhochschulen` = "is_applied",
+        `Pädagogische Hochschulen` = "is_edu",
+        `Andere Forschungsinstitutionen` = "is_other"
+      ),
+    institution = fct_relevel(institution, institutions_order)
+  ) |>
+  group_by(institution, year) |>
+  summarise(
+    n_proj_with_partner = sum(n_partners > 0) / n(),
+    ave_n_partner = mean(n_partners),
+    n_proj = n()
+  ) |>
+  ungroup() |>
+  mutate(data_id = row_number())
+
+```
+
+### Fachhochschulen mit höchstem Anteil
+
+Die Schweizer Forschungslandschaft besteht aus verschiedenen Arten von Institutionen mit spezifischen Aufgaben und wissenschaftlichen Zielen. In den sechs untersuchten Jahren war bei den Projekten mit mindestens einer gesuchstellenden Person aus einer Fachhochschule der Anteil der Projekte mit Partnerschaften am höchsten (`r round(proj_partners_inst_years |> filter(str_detect(institution, "Fachh")) |> summarise(mean = weighted.mean(n_proj_with_partner, n_proj)) |> pull(mean) * 100)`%). Bei den Förderbeiträgen, die an Gesuchstellende von Pädagogischen Hochschulen oder Forschungsinstitutionen der Kategorie « Andere » gingen, war der Anteil der Projekte mit Partnerschaften mit `r round(proj_partners_inst_years |> filter(str_detect(institution, "Päda")) |> summarise(mean = weighted.mean(n_proj_with_partner, n_proj)) |> pull(mean) * 100)`% (PH) bzw. `r round(proj_partners_inst_years |> filter(str_detect(institution, "Andere")) |> summarise(mean = weighted.mean(n_proj_with_partner, n_proj)) |> pull(mean) * 100)`% (Andere) höher als bei den kantonalen Universitäten (`r round(proj_partners_inst_years |> filter(str_detect(institution, "Kanto")) |> summarise(mean = weighted.mean(n_proj_with_partner, n_proj)) |> pull(mean) * 100)`%) und im ETH-Bereich (`r round(proj_partners_inst_years |> filter(str_detect(institution, "ETH")) |> summarise(mean = weighted.mean(n_proj_with_partner, n_proj)) |> pull(mean) * 100)`%). Dies deckt sich mit früheren Zahlen, wonach bei Gesuchen der MINT-Disziplinen tendenziell weniger häufig auf Partnerschaften gesetzt wird. Bei den Projekten aus dem ETH-Bereich ist der Anteil von Gesuchen der MINT-Disziplinen wesentlich höher als in den anderen Institutionen.
+
+```{r data-fig-3, include=FALSE}
+
+# Figure 3 (ggplot)
+proj_partners_inst_years_fig <-
+  proj_partners_inst_years |>
+  ggplot() +
+  aes(
+    x = year,
+    y = n_proj_with_partner,
+    color = institution,
+    tooltip =
+      glue(
+        "Jahr: {year}<br>",
+        "Forschungsinstitution: {institution}<br>",
+        "<b>Prozentualer Anteil geförderter Projekte<br>",
+        " mit Projektpartner:innen: {
+        print_num(round(n_proj_with_partner * 100, 1))
+        }%</b>"
+      ),
+    data_id = data_id) +
+  geom_line(aes(tooltip = NULL)) +
+  geom_point_interactive(size = 2.5, stroke = 0.2) +
+  geom_text(
+    data =
+      filter(
+        proj_partners_inst_years,
+        (
+          year == 2021 & institution %in% c("Kantonale Universitäten",
+                                            "ETH-Bereich",
+                                            "Pädagogische Hochschulen")
+        ) |
+          (
+            year == 2022 & institution %in% c("Andere Forschungsinstitutionen",
+                                              "Fachhochschulen")
+          )
+      ),
+    aes(
+      label = str_wrap(institution, 20),
+      y =
+        case_when(
+          institution == "Pädagogische Hochschulen"
+          ~ n_proj_with_partner + 0.1,
+          
+          institution %in% c("ETH-Bereich", "Kantonale Universitäten")
+          ~ n_proj_with_partner - 0.025,
+          
+          institution == "Andere Forschungsinstitutionen"
+          ~ n_proj_with_partner + 0.0625,
+          
+          TRUE ~ n_proj_with_partner + 0.0125
+        ),
+      x =
+        if_else(
+          year == 2022, year + 0.125, year
+        ),
+      hjust = if_else(year == 2022, 0, 0.5)
+    ),
+    vjust = 1,
+    size = 3,
+    family = "Source Sans Pro",
+    fontface = "bold"
+  ) +
+  scale_color_manual(values = get_datastory_scheme()[-4]) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_x_continuous(breaks = c(2017:2022)) +
+  coord_cartesian(xlim = c(2017, 2023.25), ylim = c(0, 1)) +
+  get_datastory_theme(gridline_axis = "y", legend_position = "")
+
+```
+
+<div class="hide-mobile hide-tablet widemedia">
+<div class="plot-box">
+<div class="plot-title">Anteil der bewilligten Gesuche mit Partner:innen nach Art der Forschungsinstitution</div>
+```{r fig-3-desk}
+
+# This figure is only visible on desktop devices
+make_ggiraph(proj_partners_inst_years_fig)
+
+```
+</div>
+</div>
+
+<div class="hide-desktop">
+<div class="plot-box">
+<div class="plot-title">Anteil der bewilligten Gesuche mit Partner:innen nach Art der Forschungsinstitution</div>
+```{r fig-3-phone}
+
+# This figure is only visible on phone and tablet devices
+make_ggiraph(proj_partners_inst_years_fig)
+
+```
+</div>
+</div>
+
+### Wo sind die Partner:innen tätig?
+
+```{r world-region, include=FALSE}
+
+# This chunk generate summary data about percentage over years of funded grants
+# involving partners from different region of the world.
+
+world_region_area_years_app <-
+  dat |>
+  select(
+    snf_grant_number, world_region, research_area, year, role, iso_code
+  ) |>
+  group_by(research_area, year, snf_grant_number) |>
+  summarise(
+    Schweiz =
+      sum(
+        role == "Projektpartner" & iso_code == "CH",
+        na.rm = TRUE
+      ) > 0,
+    `Europa (ohne\nSchweiz)` =
+      sum(
+        role == "Projektpartner" & world_region == "Europe" & iso_code != "CH",
+        na.rm = TRUE
+      ) > 0,
+    Ozeanien =
+      sum(
+        role == "Projektpartner" & world_region == "Oceania",
+        na.rm = TRUE
+      ) > 0,
+    Asien =
+      sum(
+        role == "Projektpartner" & world_region == "Asia",
+        na.rm = TRUE
+      ) > 0,
+    Lateinamerika =
+      sum(
+        role == "Projektpartner" & world_region == "Latin America",
+        na.rm = TRUE
+      ) > 0,
+    Nordamerika =
+      sum(
+        role == "Projektpartner" & world_region == "North America",
+        na.rm = TRUE
+      ) > 0,
+    Afrika = 
+      sum(
+        role == "Projektpartner" & world_region == "Africa",
+        na.rm = TRUE
+      ) > 0,
+    `Keine\nProjektpartner:innen` =
+      mean(role != "Projektpartner", na.rm = TRUE) == 1
+  ) |>
+  ungroup() |>
+  pivot_longer(
+    Schweiz:`Keine\nProjektpartner:innen`,
+    values_to = "region_involved",
+    names_to = "world_region"
+  ) |>
+  group_by(research_area, year, world_region) |>
+  summarise(
+    mean = mean(region_involved),
+    n = sum(region_involved)
+  ) |>
+  ungroup() |>
+  mutate(
+    world_region = fct_reorder(world_region, mean, sum, .desc = TRUE),
+    without_partner = world_region == "Keine\nProjektpartner:innen"
+  )
+
+```
+
+```{r in-text-data-3, include=FALSE}
+
+# This chunk generate data used in-text about international aspect of project
+# partners.
+
+other_regions_pct_proj <-
+  dat |>
+  group_by(snf_grant_number) |>
+  summarise(
+    part =
+      sum(
+        role == "Projektpartner" & world_region %in% c("Asia", "Oceania",
+                                                       "Africa",
+                                                       "Latin America"),
+        na.rm = TRUE
+      ) > 0
+  ) |>
+  ungroup() |>
+  summarise(pct = mean(part, na.rm = TRUE))
+
+abroad_part_discipline <-
+  dat |>
+  group_by(snf_grant_number, research_area) |>
+  summarise(
+    mean =
+      sum(role == "Projektpartner", na.rm = TRUE) > 0
+    &
+      sum(iso_code[role == "Projektpartner"] != "CH", na.rm = TRUE) > 0
+  ) |>
+  group_by(research_area) |>
+  summarise(mean = mean(mean))
+
+```
+
+Während nur Forschende ein Gesuch stellen können, die an einer Schweizer Institution tätig sind, gibt es für die Projektpartnerschaften keine solche Vorgabe. Die Mehrheit der Partner:innen arbeitet an einer Institution in der Schweiz oder im übrigen Europa. In `r round(n_proj_ch / length(unique(dat$snf_grant_number)) * 100)`% der geförderten Projekte war eine Partnerin oder ein Partner aus der Schweiz eingebunden, in `r round(n_proj_europe / length(unique(dat$snf_grant_number)) * 100)`% aus Europa (ohne Schweiz) und in `r round(n_proj_northam / length(unique(dat$snf_grant_number)) * 100)`% aus Nordamerika (USA und Kanada). Bei lediglich `r round(other_regions_pct_proj * 100)`% der bewilligten Gesuche waren Forschende beteiligt, die an einer Institution in Asien, Ozeanien, Afrika oder Lateinamerika (Südamerika und Mexiko) tätig sind.
+
+```{r data-fig-4, include=FALSE}
+
+# Factors with the different world regions used in the figure
+world_region_levels <-
+  fct_relevel(
+    world_region_area_years_app$world_region,
+    "Keine\nProjektpartner:innen", after = Inf
+  ) |>
+  levels()
+
+# Colors for the different world regions used in the figure
+world_region_colors <-
+  get_datastory_scheme(
+    n_col = length(world_region_levels)
+  )[-4]
+world_region_colors[str_starts(world_region_levels, "No p")] <- "#808080"
+  
+# Figure 4 (ggplot)
+world_region_area_years_app_fig <-
+  world_region_area_years_app |>
+  mutate(
+    data_id = 1:n(),
+    world_region = fct_relevel(world_region, world_region_levels)
+  ) |>
+  ggplot() +
+  aes(
+    x = year,
+    y = mean,
+    color = world_region,
+    linetype = world_region,
+    tooltip =
+      if_else(
+        world_region != "Keine\nProjektpartner:innen",
+        glue(
+          "Jahr: {year}<br>",
+          "Forschungsbereich: {research_area}<br>",
+          "<b>Prozentualer Anteil geförderter Projekte<br>",
+          "mit mindestens einer Partnerin oder<br>",
+          "einem Partner aus {if_else(world_region == 'Schweiz',
+          paste0('der ', world_region), as.character(world_region)
+          )}: {print_num(round(mean * 100, 1))}%</b>"
+        ),
+        glue(
+          "Jahr: {year}<br>",
+          "Forschungsbereich: {research_area}<br>",
+          "<b>Prozentualer Anteil geförderter Projekte<br>",
+          "ohne Projektpartner:innen: {print_num(round(mean * 100, 1))}%</b>"
+        )
+      ),
+    data_id = data_id
+  ) +
+  geom_line(aes(tooltip = NULL)) +
+  geom_point_interactive(size = 2.5, stroke = 0.2) +
+  coord_cartesian(ylim = c(0, 0.8)) +
+  scale_color_manual(values = world_region_colors) +
+  scale_linetype_manual(
+    labels = world_region_levels,
+    values = c(1, 1, 1, 1, 1, 1, 1, 8)
+  ) +
+  scale_y_continuous(labels = scales::percent) +
+  facet_wrap(~research_area, ncol = 2) +
+  get_datastory_theme(gridline_axis = "y") +
+  theme(
+    legend.position = c(0.575, 0.05),
+    legend.justification = c(0, 0),
+    legend.key.width = unit(2, "lines")
+  ) +
+  guides(
+    colour = guide_legend(ncol = 2),
+    linetype = guide_legend(ncol = 2)
+  )
+
+```
+
+<div class="hide-mobile hide-tablet widemedia">
+<div class="plot-box">
+<div class="plot-title">Anteil der geförderten Projekte mit Partner:innen nach Region</div>
+```{r fig-4-desk}
+
+# This figure is only visible on desktop devices
+make_ggiraph(world_region_area_years_app_fig)
+
+```
+</div>
+</div>
+
+<div class="hide-desktop">
+<div class="plot-box">
+<div class="plot-title">Anteil der geförderten Projekte mit Partner:innen nach Region</div>
+```{r fig-4-phone}
+
+# This figure is only visible on tablet and phone devices
+make_ggiraph(world_region_area_years_app_fig)
+
+```
+</div>
+</div>
+
+In den Geistes- und Sozialwissenschaften ist der Prozentsatz der bewilligten Projekte mit einer Partnerschaft in Europa (`r round(filter(world_region_area_years_app, research_area == "GSW") |> group_by(world_region) |> summarise(mean = weighted.mean(mean, n)) |> filter(world_region == "Europa (ohne\nSchweiz)") |> pull(mean) * 100)`%) oder Nordamerika (`r round(filter(world_region_area_years_app, research_area == "GSW") |> group_by(world_region) |> summarise(mean = weighted.mean(mean, n)) |> filter(world_region == "Nordamerika") |> pull(mean) * 100)`%) höher als in den anderen Forschungsbereichen. In den Lebenswissenschaften war bei lediglich `r round(filter(world_region_area_years_app, research_area == "LW") |> group_by(world_region) |> summarise(mean = weighted.mean(mean, n)) |> filter(world_region == "Europa (ohne\nSchweiz)") |> pull(mean) * 100)`% der bewilligten Gesuche eine Partnerin oder ein Partner aus Europa beteiligt, bei `r round(filter(world_region_area_years_app, research_area == "LW") |> group_by(world_region) |> summarise(mean = weighted.mean(mean, n)) |> filter(world_region == "Nordamerika") |> pull(mean) * 100)`% aus Nordamerika. Im MINT-Bereich betrugen diese Anteile `r round(filter(world_region_area_years_app, research_area == "MINT") |> group_by(world_region) |> summarise(mean = weighted.mean(mean, n)) |> filter(world_region == "Europa (ohne\nSchweiz)") |> pull(mean) * 100)`% (Europa) und `r round(filter(world_region_area_years_app, research_area == "MINT") |> group_by(world_region) |> summarise(mean = weighted.mean(mean, n)) |> filter(world_region == "Nordamerika") |> pull(mean) * 100)`% (Nordamerika). Während in den GSW insgesamt mehr Partnerschaften mit dem Ausland bestanden (`r round(abroad_part_discipline$mean[abroad_part_discipline$research_area == "GSW"] * 100)`%) als in den LW (`r round(abroad_part_discipline$mean[abroad_part_discipline$research_area == "LW"] * 100)`%) und im MINT-Bereich  (`r round(abroad_part_discipline$mean[abroad_part_discipline$research_area == "MINT"] * 100)`%), wiesen die MINT-Projekte am meisten Partnerschaften mit Asien auf (`r round(world_region_area_years_app |> filter(research_area == "MINT", world_region == "Asien") |> summarise(mean = weighted.mean(mean, n)) |> pull(mean) * 100)`%).
+
+```{r country-partner, include=FALSE}
+
+# This chunk generate summary data on the percentage of project including
+# partners from different countries (only most represented are used).
+partners_country_area <-
+  dat |>
+  drop_na(country) |>
+  filter(iso_code != "CH") |>
+  mutate(
+    country =
+      case_when(
+        iso_code == "JP" ~ "Japan",
+        iso_code == "FI" ~ "Finnland",
+        iso_code == "SE" ~ "Schweden",
+        iso_code == "BE" ~ "Belgien",
+        iso_code == "ES" ~ "Spanien",
+        iso_code == "AU" ~ "Australien",
+        iso_code == "AT" ~ "Österreich",
+        iso_code == "CA" ~ "Kanada",
+        iso_code == "NL" ~ "Niederlanden",
+        iso_code == "IT" ~ "Italien",
+        iso_code == "GB" ~ "Grossbritannien",
+        iso_code == "FR" ~ "Frankreich",
+        iso_code == "DE" ~ "Deutschland",
+        iso_code == "US" ~ "Vereinigten Staaten",
+        iso_code == "DK" ~ "Dänemark",
+        TRUE ~ country
+      ),
+    world_region =
+      case_when(
+        world_region == "North America" ~ "Nordamerika",
+        world_region == "Asia" ~ "Asien",
+        world_region == "Oceania" ~ "Ozeanien",
+        world_region == "Europe" ~ "Europa",
+        TRUE ~ world_region
+      )
+  ) |>
+  count(country, research_area, world_region) |>
+  group_by(research_area) |>
+  mutate(pct = n / sum(n)) |>
+  ungroup() |>
+  mutate(
+    country = fct_reorder(country, n, sum),
+    world_region = fct_reorder(world_region, n, sum, .desc = TRUE)
+  ) |>
+  arrange(desc(n)) |>
+  filter(
+    country %in% levels(country)[
+      (length(levels(country))-14):length(levels(country))
+    ]) |>
+  mutate(data_id = 1:n()) |>
+  ungroup()
+
+```
+
+Die folgende Abbildung zeigt die 15 am häufigsten vertretenen Länder (ohne die Schweiz) nach Forschungsbereich. Über alle Forschungsbereiche gesehen bestehen die meisten Partnerschaften mit den `r partners_country_area |> group_by(country) |> summarise(pct = weighted.mean(pct, n)) |> arrange(desc(pct)) |> slice(1) |> pull(country) |> as.character()` (`r round(partners_country_area |> group_by(country) |> summarise(pct = weighted.mean(pct, n)) |> arrange(desc(pct)) |> slice(1) |> pull(pct) * 100)`%), gefolgt von `r partners_country_area |> group_by(country) |> summarise(pct = weighted.mean(pct, n)) |> arrange(desc(pct)) |> slice(2) |> pull(country) |> as.character()` (`r round(partners_country_area |> group_by(country) |> summarise(pct = weighted.mean(pct, n)) |> arrange(desc(pct)) |> slice(2) |> pull(pct) * 100)`%) und `r partners_country_area |> group_by(country) |> summarise(pct = weighted.mean(pct, n)) |> arrange(desc(pct)) |> slice(3) |> pull(country) |> as.character()` (`r round(partners_country_area |> group_by(country) |> summarise(pct = weighted.mean(pct, n)) |> arrange(desc(pct)) |> slice(3) |> pull(pct) * 100)`%). Die Abbildung bestätigt die Beobachtung, dass die an ausländischen Institutionen tätigen Partner:innen sich insgesamt überwiegend in Europa befinden (`r partners_country_area |> group_by(research_area) |> summarise(n = sum(world_region == "Europa")) |> ungroup() |> summarise(n = mean(n)) |> pull(n)` der 15 in den einzelnen Bereichen am häufigsten vertretenen Länder gehören zu Europa), während Länder wie Kanada, Australien und Japan ebenfalls unter den ersten 15 zu finden sind.
+
+```{r data-fig-5}
+
+# This figure use a trick from the 'tidytext' package to allow the different
+# facets to have a different factor order on the x axis. See here for a code
+# example: https://community.rstudio.com/t/facet-specific-ordering-for-stacked-bar-chart/40491/3)
+
+# Figure 5 (ggplot)
+partners_country_area_fig <-
+  partners_country_area |>
+  mutate(
+    country_tip = country,
+    country =
+      fct_recode(
+        country,
+        "Vereinigte Staaten" = "Vereinigten Staaten",
+        "Niederlande" = "Niederlanden"
+      )
+  ) |>
+  ggplot() +
+  aes(
+    x = pct,
+    y = tidytext::reorder_within(country, pct, research_area),
+    fill = world_region,
+    tooltip =
+      glue(
+        "Forschungsbereich: {research_area}<br>",
+        "Weltregion: {world_region}<br>",
+        "<b>{print_num(round(pct * 100, 1))}% der Projektpartner:innen<br>",
+        "tätig in  {
+          if_else(
+            country %in% c('Vereinigte Staaten',
+                           'Niederlande'),
+            paste0('den ', country_tip),
+            as.character(country_tip)
+          )
+        }<b>"
+      ),
+    data_id = "data_id") +
+  geom_col_interactive(color = "white") +
+  geom_text_interactive(
+    aes(label = paste(print_num(round(pct * 100, 1)), "%"),
+        x = pct),
+    color = "black",
+    family = "Source Sans Pro",
+    size = 2.5,
+    hjust = -0.15,
+    show.legend = FALSE) +
+  coord_cartesian(expand = FALSE) +
+  facet_wrap(~research_area, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = get_datastory_scheme()[-4]) +
+  tidytext::scale_y_reordered() +
+  scale_x_continuous(labels = scales::percent, limits = c(0, 0.23)) +
+  get_datastory_theme(gridline_axis = "x", legend_position = "top")
+
+```
+
+<div class="hide-mobile hide-tablet widemedia">
+<div class="plot-box">
+<div class="plot-title">Die 15 am häufigsten durch Projektpartner:innen vertretenen Länder nach Forschungsbereich</div>
+```{r fig-5-desk, fig.height=10}
+
+# This figure is only visible on desktop devices
+make_ggiraph(partners_country_area_fig, h = 10, sw = NA, scolor = "#FFFFFF")
+
+```
+</div>
+</div>
+
+<div class="hide-desktop">
+<div class="plot-box">
+<div class="plot-title">Die 15 am häufigsten durch Projektpartner:innen vertretenen Länder nach Forschungsbereich</div>
+```{r fig-5-phone, fig.height=10}
+
+# This figure is only visible on tablet and phone devices
+make_ggiraph(partners_country_area_fig, h = 10, sw = NA, scolor = "#FFFFFF")
+
+```
+</div>
+</div>
+
+Die USA, Deutschland und Frankreich sind in allen Forschungsbereichen die drei am häufigsten vertretenen Länder; je nach Bereich ist die Reihenfolge aber anders. In den GSW ist Deutschland am häufigsten mit Partnerschaften vertreten, in den MINT-Disziplinen und den LW dagegen die USA. Bei den aussereuropäischen Ländern fällt auf, dass die MINT-Disziplinen wesentlich mehr Partnerschaften mit Japan aufweisen. Dies deckt sich mit der Beobachtung, dass in den MINT-Disziplinen mehr Partner:innen in Asien tätig sind als in den anderen Forschungsbereichen.
+
+### Erfolgsquoten von Gesuchen mit Projektpartnern
+
+```{r partners-success, include=FALSE}
+
+# This chunk generate data used in-text and for a figure on success rate and
+# number of project partners in applications.
+
+success_rate_size_area <-
+  success_dat |>
+  group_by(grant_id, is_approved, research_area) |>
+  summarise(
+    n_partners =
+      case_when(
+        n_partners > 3 ~ "3+",
+        n_partners > 1 ~ "2-3",
+        n_partners == 1 ~ "1",
+        n_partners == 0 ~ "0"
+      )
+  ) |>
+  group_by(n_partners, research_area) |>
+  summarise(
+    success_rate = mean(is_approved),
+    n_proj = n()
+  ) |>
+  ungroup() |>
+  mutate(
+    n_partners = factor(n_partners)
+  ) |>
+  mutate(data_id = row_number())
+
+success_partnership_status_ls <-
+  success_rate_size_area |>
+  filter(!is.na(n_proj), research_area == "LW") |>
+  mutate(has_partner = n_partners != "0") |>
+  group_by(has_partner) |>
+  summarise(sr = weighted.mean(success_rate, n_proj))
+
+```
+
+Die letzte Abbildung zeigt die Erfolgsquote der Gesuche (d. h. den Anteil der bewilligten Gesuche an allen eingereichten Gesuchen) nach Anzahl der Partnerschaften. Auf deskriptiver Ebene sind die Unterschiede gering, mit Ausnahme der Lebenswissenschaften, bei denen die Gesuche ohne Projektpartner eine wesentlich grössere Erfolgsquote erzielten (`r round(success_partnership_status_ls$sr[!success_partnership_status_ls$has_partner] * 100)`%) als Gesuche mit mindestens einer Partnerin oder einem Partner (insgesamt `r round(success_partnership_status_ls$sr[success_partnership_status_ls$has_partner] * 100)`%).
+
+```{r data-fig-6, include=FALSE}
+
+# Figure 6 (ggplot)
+success_rate_size_area_fig <-
+  success_rate_size_area |>
+  ggplot() +
+  aes(
+    x = research_area, y = success_rate,
+    fill = n_partners, group = n_partners,
+    tooltip =
+      glue(
+        "Anzahl Projektpartner:innen: {n_partners}<br>",
+        "Forschungsbereich: {research_area}<br>",
+        "<b>Erfolgsquote: {print_num(round(success_rate * 100, 1))}%</b>"
+      ),
+    data_id = data_id
+  ) +
+  geom_col_interactive(position = position_dodge(), color = "white") +
+  annotate(
+    geom = "text",
+    x =
+      c(
+        c(0.625, 0.875, 1.125, 1.375),
+        c(0.625, 0.875, 1.125, 1.375) + 1,
+        c(0.625, 0.875, 1.125, 1.375) + 2
+      ),
+    y = -0.05,
+    label = rep(c("0", "1", "2-3", "3+"), 3),
+    size = 3,
+    color = "#4F4F4F",
+    family = "Source Sans Pro"
+  ) +
+  annotate(
+    geom = "text",
+    x = c(1:3),
+    y = 0.7,
+    label = c("GSW", "MINT", "LW"),
+    fontface = "bold",
+    size = 3.5,
+    family = "Source Sans Pro"
+  ) +
+  coord_cartesian(ylim = c(-.025, 0.8)) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = get_datastory_scheme(n_col = 5)[-4]) +
+  labs(x = "Anzahl Projektpartner:innen") +
+  get_datastory_theme(
+    title_axis ="x",
+    text_axis = "y",
+    gridline_axis = "y",
+    legend_position = ""
+  )
+
+```
+
+<div class="hide-mobile hide-tablet widemedia">
+<div class="plot-box">
+<div class="plot-title">Erfolgsquote und Anzahl Projektpartner:innen</div>
+```{r fig-6-desk}
+
+# This figure is only visible on desktop devices
+make_ggiraph(success_rate_size_area_fig, sw = NA, scolor = "#FFFFFF")
+
+```
+</div>
+</div>
+
+<div class="hide-desktop">
+<div class="plot-box">
+<div class="plot-title">Erfolgsquote und Anzahl Projektpartner:innen</div>
+```{r fig-6-phone}
+
+# This figure is only visible on tablet and phone devices
+make_ggiraph(success_rate_size_area_fig, sw = NA, scolor = "#FFFFFF")
+
+```
+</div>
+</div>
+
+Forschung erfordert Zusammenarbeit, und die Einbindung von Partner:innen ist einer der Wege, um diese Zusammenarbeit in Projekten zu fördern. Der SNF wird die Verwendung von Partnerschaften weiterhin beobachten und analysieren.
+
+Daten, Text und Code zu dieser Datengeschichte sind <a href="`r params$github`" target="_blank">auf Github verfügbar</a> und <a href="`r params$doi`" target="_blank">auf Zenodo archiviert</a>.<br>DOI: `r str_remove(params$doi, "https://doi.org/")`
+
+```{r prevent-internal-snsf-packages, include=FALSE}
+# Internal SNSF packages must not be used in data stories, as their
+# pre-processing functions are internal and the corporate design differs from
+# the data portal.
+if (any(c("snfverse", "snf.preprocessing", "snf.plot") %in%
+        loadedNamespaces())) {
+  stop(glue(
+    "You must not use internal SNSF packages in data stories.",
+    " Please resort to snf.datastory."
+  ))
+}
+```

@@ -16,7 +16,7 @@ The data used in this data story are available in the folder `data`. The data ar
 
 #### Data set 1: `data.csv`
 
-This data set contains information about funded grants as described in the data story. Each line represent a person involved in the research project. Each funded grant is identified with the variable `snf_grant_number`. Please note thtat some variables are grant-specific and other are person-specific. Here follows a description of grant-specific variables:
+This data set contains information about funded grants as described in the data story. Each line represent a person involved in the research project. Each funded grant is identified with the variable `snf_grant_number`. Please note that some variables are grant-specific and other are person-specific. Here follows a description of grant-specific variables:
 
 -   `snf_grant_number`: the number of the grant used at the SNSF (can be used to search grant at <https://data.snf.ch/grants>)
 -   `year`: year in which decisions on most grants of a call are made (it normally means the year in which a grant was approved)
@@ -39,7 +39,7 @@ Here follows a description of person-specific variables:
 
 This data set contains anonymized aggregated data about success rate for proposals described in the data story. Each row represent a single application and here follows a description of the included variables:
 
--   `grand_id`: anonymized grant identifier
+-   `grant_id`: anonymized grant identifier
 -   `is_approved`: whether the proposal has been approved for funding (TRUE is yes and FALSE is no)
 -   `research_area`: the SNSF distinguishes three major research domains (humanities and social sciences, mathematics, natural and engineering sciences, and biology and medicine)
 -   `n_partners`: numbers of project partners included in the proposal, as described in the data story

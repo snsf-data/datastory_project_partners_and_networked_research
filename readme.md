@@ -31,7 +31,7 @@ Here follows a description of person-specific variables:
 -   `country`: country where the researcher is based
 -   `iso_code`: ISO code of the country where the researcher is based
 -   `continent`: continent of the country where the researcher is based
--   `partner_budget`: amount from the amount granted devoted to the project partner
+-   `partner_budget`: amount from the amount granted devoted to the project partner (*Unfortunately not able to share then it is only NA in the data set*)
 -   `world_region`: region of the world where the researcher is based (see the data story for more details)
 -   `person_id`: unique identifier
 

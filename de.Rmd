@@ -943,7 +943,7 @@ partners_country_area_fig <-
           )
         }<b>"
       ),
-    data_id = "data_id") +
+    data_id = data_id) +
   geom_col_interactive(color = "white") +
   geom_text_interactive(
     aes(label = paste(print_num(round(pct * 100, 1)), "%"),
